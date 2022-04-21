@@ -14,8 +14,8 @@ uname -sa  ## Information about the operating system
 module load cellranger/4.0.0
 
 ## Set variables
-input_dir=～/ChinmoST/input/data/scRNA/
-output_dir=～/ChinmoST/output/scRNA/cellranger/
+input_dir=~/ChinmoST/input/data/scRNA/
+output_dir=~/ChinmoST/output/scRNA/cellranger/
 reference_dir=~/DB/10X_reference/
 samples_01=(WT35 Mu35)
 samples_02=(WT68 Mu68 WT911 Mu911)
