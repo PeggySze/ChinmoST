@@ -17,8 +17,8 @@ module load cellranger/4.0.0
 input_dir=~/ChinmoST/input/data/scRNA/
 output_dir=~/ChinmoST/output/scRNA/cellranger/
 reference_dir=~/DB/10X_reference/
-samples_01=(WT35 Mu35)
-samples_02=(WT68 Mu68 WT911 Mu911)
+samples_01=(WT_D35 ChinmoST_D35)
+samples_02=(WT_D68 ChinmoST_D68 WT_D911 ChinmoST_D911)
 
 ## generate single cell feature counts by cellranger count
 cd ${output_dir}
