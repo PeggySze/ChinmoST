@@ -70,7 +70,7 @@ testis_scRNA.list <- SplitObject(merged_obj,split.by = "ident")
 ## perform standard preprocessing (log-normalization), and identify variable features individually for each
 for (i in 1:length(testis_scRNA.list)){
   testis_scRNA.list[[i]] <- NormalizeData(testis_scRNA.list[[i]],verbose = FALSE)
-  testis_scRNA.list[[i]] <- FindVariableFeatures(testis_scRNA.list[[i]],selection.method = "vst", nfeatures = 3000, verbose = FALSE)
+  testis_scRNA.list[[i]] <- FindVariableFeatures(testis_scRNA.list[[i]],selection.method = "vst", nfeatures = 2000, verbose = FALSE)
 }
 
 ## identify anchors using the FindIntegrationAnchors function
@@ -156,7 +156,8 @@ our_curated_markers <- c(
 )
 
 
-for ( nPCs in c(20,25,30,35,40)){
+for ( nPCs in seq(20,40,5)){
+  DefaultAssay(testis_scRNA.integrated) <- "integrated"
   testis_scRNA.integrated <- FindNeighbors(testis_scRNA.integrated, dims = 1:nPCs)
   testis_scRNA.integrated <- FindClusters(testis_scRNA.integrated, resolution = 0.2)
   testis_scRNA.integrated <- RunUMAP(testis_scRNA.integrated, dims = 1:nPCs)
@@ -165,8 +166,8 @@ for ( nPCs in c(20,25,30,35,40)){
   p2 <- DimPlot(testis_scRNA.integrated, reduction = "umap",group.by="orig.ident")
   print(p1)
   print(p2)
-
   dev.off()
+  DefaultAssay(testis_scRNA.integrated) <- "RNA"
   pdf(str_c(out_dir,"integrated_PC",nPCs,"_markers_UMAP.pdf"))
   p <- FeaturePlot(testis_scRNA.integrated,features=unique(c(FlyCellAtlas_markers,our_curated_markers)),combine=FALSE)
   print(p)
@@ -174,6 +175,7 @@ for ( nPCs in c(20,25,30,35,40)){
 }
 
 ## select 30 PCs
+DefaultAssay(testis_scRNA.integrated) <- "integrated"
 testis_scRNA.integrated <- FindNeighbors(testis_scRNA.integrated, dims = 1:30)
 testis_scRNA.integrated <- RunUMAP(testis_scRNA.integrated, dims = 1:30)
 
@@ -283,6 +285,7 @@ saveRDS(testis_scRNA.integrated,str_c(out_dir,"integrated_PC30_testis_scRNA.rds"
 # germline_subclustering.R
 
 ## cell type annotation based on subclustering results
+
 
 
 
