@@ -475,3 +475,6 @@ for (i in 1:length(genes)){
   
 }
 dev.off()
+
+## save Seurat object
+saveRDS(germline_cells.scRNA.integrated,str_c(out_dir,"integrated_germline_cells_scRNA.rds"))
