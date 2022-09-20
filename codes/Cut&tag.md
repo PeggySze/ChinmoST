@@ -12,4 +12,51 @@
 	- run_Cut&tag_pipeline.sh
 
 
-## 
+## Filter peaks and calculate Fraction of reads in peaks (FRiP)
+- keep peaks in autosomes,chrX,chrY
+	- script : 
+- calculate Fraction of reads in peaks (FRiP) value
+	- script : 
+```R
+
+
+```
+
+
+## Assess reproducibility between biological replicates
+- Assess reproducibility by Irreproducibility Discovery Rate (IDR) framework
+	- script : 
+```R
+
+
+```
+
+
+## Chinmo binding sites motif analysis
+- script : 
+```R
+
+
+```
+
+
+## Footprinting analysis by HINT-ATAC
+- script : 
+```R
+
+
+```
+
+
+## Differential peak analysis by DiffBind
+```R
+
+
+```
+
+
+## Binding and Expression Target Analysis (BETA)
+- script : 
+```R
+
+```
