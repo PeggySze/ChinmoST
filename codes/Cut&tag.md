@@ -164,7 +164,148 @@ dev.off()
 
 ## Differential peak analysis by DiffBind
 ```R
+## Load required packages
+library(DiffBind)
+library(RColorBrewer)
+library(circlize)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(xlsx)
+library(ComplexHeatmap)
 
+## Reading in the peaksets
+bam_files <- list.files("~/ChinmoST/output/chinmo_cut_tag/bam",pattern="*_sorted_rmDup_mapped_rmbl_shift.bam$",full.names=TRUE)
+bam_files <- bam_files[c(grep("ChinmoST",bam_files),grep("WT",bam_files))]
+peak_files <- list.files("~/ChinmoST/output/chinmo_cut_tag/MACS2",pattern="*_filtered_peaks.narrowPeak",full.names=TRUE)
+peak_files <- peak_files[c(grep("ChinmoST",peak_files),grep("WT",peak_files))]
+bam_samples <- sapply(1:length(bam_files),function(i){
+  sample <- unlist(strsplit(unlist(strsplit(bam_files[i],"/"))[6],"_sorted"))[1]
+  sample
+  })
+peak_samples <- sapply(1:length(peak_files),function(i){
+  sample <- unlist(strsplit(unlist(strsplit(peak_files[i],"/"))[6],"_filtered"))[1]
+  sample
+  })
+all(bam_samples==peak_samples)
+samples <- bam_samples
+tissues <- sapply(1:length(samples),function(i){
+	unlist(strsplit(samples[i],"_"))[1]
+	})
+replicates <- c(1:4,1:4)
+df <- data.frame(SampleID=samples,Tissue=tissues,Factor="chinmo",Replicate=replicates,bamReads=bam_files,Peaks=peak_files,PeakCaller="narrow")
+dbaObj <- dba(sampleSheet=df)
+
+## calculate a binding matrix with scores based on read counts for every sample
+# bUseSummarizeOverlaps: to use a more standard counting procedure than the built-in one by default
+dbaObj <- dba.count(dbaObj, bUseSummarizeOverlaps=TRUE)
+
+## Figure S6A - Correlation between WT and Mutant samples
+pdf("~/ChinmoST/output/chinmo_cut_tag/diffbind/WT_Mu_count_scores_correlation_heatmap.pdf",height=8,width=8)
+p <- dba.plotHeatmap(dbaObj,cexRow=0.8,cexCol=0.8)
+dev.off()
+
+days <- sapply(1:length(samples),function(i){
+  unlist(strsplit(samples[i],"_"))[2]
+  })
+sample_types <- sapply(1:length(samples),function(i){
+  unlist(strsplit(samples[i],"_"))[1]
+  })
+ha <- HeatmapAnnotation(
+  df = data.frame(
+      Day=days,
+      Tissue=sample_types,
+      row.names=samples),
+  col = list(
+    Day=c("D57"=brewer.pal(9,"Reds")[5],"D911"=brewer.pal(9,"Reds")[7]),
+    Tissue=c("WT"=brewer.pal(8,"Set2")[1],"ChinmoST"=brewer.pal(8,"Set2")[3])),
+  annotation_legend_param = list(Day = list(nrow = 1,title_position = "topcenter"),Tissue=list(nrow = 1,title_position = "topcenter"))
+  )
+pdf("~/ChinmoST/output/chinmo_cut_tag/diffbind/WT_Mu_count_scores_correlation_heatmap.pdf",height=8,width=7)
+h <- Heatmap(p,top_annotation=ha,name="Pearson correlation",row_names_gp = gpar(fontsize = 9),column_names_gp = gpar(fontsize = 9),col=colorRamp2(breaks=c(0,0.2,0.4,0.6,0.8,1),colors=c("#FFFFFF",brewer.pal(9,"Greens")[c(2,4,6,8,9)])),heatmap_legend_param = list(direction = "horizontal",legend_width = unit(4, "cm"), title_position = "topcenter"))
+draw(h,heatmap_legend_side = "bottom",annotation_legend_side = "bottom")
+dev.off()
+
+## Establishing a model design and contrast
+dbaObj <- dba.contrast(dbaObj,categories=DBA_TISSUE,minMembers = 2)
+
+## Performing the differential enrichment analysis
+dbaObj <-  dba.analyze(dbaObj, method=DBA_ALL_METHODS)
+dba.show(dbaObj, bContrasts=TRUE)
+
+## Retrieving the differentially bound sites (DBSs), adjusted p-values (FDR) <0.05,abs(FC)>=log2(1.5)
+Mu_vs_WT_DBSs <- dba.report(dbaObj, method=DBA_EDGER, contrast = 1,fold=log2(1.5))
+
+# add annotation
+library(ChIPseeker)
+library(TxDb.Dmelanogaster.UCSC.dm6.ensGene)
+library(org.Dm.eg.db)
+txdb <- TxDb.Dmelanogaster.UCSC.dm6.ensGene
+peaks_df <- as.data.frame(dba.peakset(dbaObj, bRetrieve=TRUE))
+peaks_df$seqnames <- factor(peaks_df$seqnames,levels=c("chr2L","chr2R","chr3L","chr3R","chr4","chrX","chrY"))
+peaks_df <- peaks_df %>% arrange(seqnames,start)
+consensus.gr <- GRanges(
+  seqnames=peaks_df$seqnames, 
+  ranges=IRanges(peaks_df$start, peaks_df$end)
+  ) 
+anno <- annotatePeak(consensus.gr,tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Dm.eg.db")
+anno <- as.data.frame(anno@anno)
+
+Mu_vs_WT_DBSs_df <- as.data.frame(dba.report(dbaObj, method=DBA_EDGER, contrast = 1,fold=log2(1.5)))
+Mu_vs_WT_DBSs_df$DBS_type <- ""
+Mu_vs_WT_DBSs_df$DBS_type[which(Mu_vs_WT_DBSs_df$Fold>=log2(1.5)&Mu_vs_WT_DBSs_df$FDR<0.05)] <- "Mu up DBS"
+Mu_vs_WT_DBSs_df$DBS_type[which(Mu_vs_WT_DBSs_df$Fold<=-log2(1.5)&Mu_vs_WT_DBSs_df$FDR<0.05)] <- "Mu down DBS"
+Mu_vs_WT_DBSs_df$DBS_type <- ifelse(Mu_vs_WT_DBSs_df$DBS_type=="","Nonsignificant",Mu_vs_WT_DBSs_df$DBS_type)
+Mu_vs_WT_DBSs_df <- left_join(Mu_vs_WT_DBSs_df,anno,by=c("seqnames","start","end")) %>% arrange(desc(Fold),FDR)
+write.xlsx(Mu_vs_WT_DBSs_df,"~/ChinmoST/output/chinmo_cut_tag/diffbind/D57_D911_Mu_vs_WT_DBSs.xlsx",row.names=FALSE)
+
+## Retrieving edgeR full results
+# Conc: Concentration - mean read concentration over all the samples (the default calculation uses log2 normalized ChIP read counts with control read counts subtracted)
+Mu_vs_WT_res <- as.data.frame(dba.report(dbaObj, method=DBA_EDGER, contrast = 1,th=1))
+Mu_vs_WT_res$DBS_type <- ""
+Mu_vs_WT_res$DBS_type[which(Mu_vs_WT_res$Fold>=log2(1.5)&Mu_vs_WT_res$FDR<0.05)] <- "Mu up DBS"
+Mu_vs_WT_res$DBS_type[which(Mu_vs_WT_res$Fold<=-log2(1.5)&Mu_vs_WT_res$FDR<0.05)] <- "Mu down DBS"
+Mu_vs_WT_res$DBS_type <- ifelse(Mu_vs_WT_res$DBS_type=="","Nonsignificant",Mu_vs_WT_res$DBS_type)
+Mu_vs_WT_res <- left_join(Mu_vs_WT_res,anno,by=c("seqnames","start","end"))
+
+# downregulated DBSs in mutant testes
+Mu_down_DBS_bed <- Mu_vs_WT_res %>%
+  dplyr::filter(DBS_type=="Mu down DBS") %>%
+  dplyr::mutate(bed_start=start-1,bed_end=end) %>%
+  dplyr::select(seqnames,bed_start,bed_end)
+write.table(Mu_down_DBS_bed,"~/ChinmoST/output/chinmo_cut_tag/diffbind/D57_D911_Mu_down_DBSs.bed",row.names=FALSE,sep="\t",quote=FALSE,col.name=FALSE)
+
+# upregulated DBSs in mutant testes
+Mu_up_DBS_bed <- Mu_vs_WT_res %>%
+  dplyr::filter(DBS_type=="Mu up DBS") %>%
+  dplyr::mutate(bed_start=start-1,bed_end=end) %>%
+  dplyr::select(seqnames,bed_start,bed_end)
+write.table(Mu_up_DBS_bedd,"~/ChinmoST/output/chinmo_cut_tag/diffbind/D57_D911_Mu_up_DBSs.bed",row.names=FALSE,sep="\t",quote=FALSE,col.name=FALSE)
+
+## get Mutant vs WT DBSs summits 
+summit_Mu_vs_WT_dbaObj <- dba.count(dbaObj, summits=TRUE, score=DBA_SCORE_SUMMIT_POS)
+Mu_vs_WT_summits <- as.data.frame(dba.peakset(summit_Mu_vs_WT_dbaObj, bRetrieve=TRUE))
+Mu_vs_WT_DBSs_summits <- left_join(Mu_vs_WT_DBSs_df[,c(1:3,9,12)],Mu_vs_WT_summits,by=c("seqnames","start","end"))
+Mu_vs_WT_DBSs_summits$summit <- round(apply(Mu_vs_WT_DBSs_summits[,8:15],1,mean))
+Mu_up_DBSs_summits <- Mu_vs_WT_DBSs_summits %>%
+    dplyr::filter(DBS_type=="Mu up DBS") %>%
+    dplyr::arrange(desc(Fold))
+Mu_up_DBSs_summits_bed <- Mu_vs_WT_DBSs_summits %>%
+    dplyr::filter(DBS_type=="Mu up DBS") %>%
+    dplyr::arrange(desc(Fold)) %>%
+    dplyr::mutate(summit_start=summit-1) %>%
+    dplyr::select(seqnames,summit_start,summit)
+Mu_down_DBSs_summits <- Mu_vs_WT_DBSs_summits %>%
+    dplyr::filter(DBS_type=="Mu down DBS") %>%
+    dplyr::arrange(Fold)
+Mu_down_DBSs_summits_bed <- Mu_vs_WT_DBSs_summits %>%
+    dplyr::filter(DBS_type=="Mu down DBS") %>%
+    dplyr::arrange(Fold) %>%
+    dplyr::mutate(summit_start=summit-1) %>%
+    dplyr::select(seqnames,summit_start,summit)
+
+## Figure 5E,F - Enriched Heatmaps over Mutant vs WT DBSs 
 
 ```
 
