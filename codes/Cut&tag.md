@@ -306,12 +306,293 @@ Mu_down_DBSs_summits_bed <- Mu_vs_WT_DBSs_summits %>%
     dplyr::select(seqnames,summit_start,summit)
 
 ## Figure 5E,F - Enriched Heatmaps over Mutant vs WT DBSs 
+library(EnrichedHeatmap)
+require(rtracklayer)
+library(GenomicRanges)
+library(circlize)
 
+# GRanges of Mutant vs WT DBSs summit +- 2000bp
+Mu_vs_WT_DBSs_summits_bed <- rbind(Mu_up_DBSs_summits_bed,Mu_down_DBSs_summits_bed)
+Mu_vs_WT_DBSs_summits.gr <- GRanges(Mu_vs_WT_DBSs_summits_bed[,1], IRanges(start = Mu_vs_WT_DBSs_summits_bed[,3], end = Mu_vs_WT_DBSs_summits_bed[,3]), strand = "*")
+Mu_vs_WT_DBSs_summits_extended.gr <-  GRanges(Mu_vs_WT_DBSs_summits_bed[,1], IRanges(start = Mu_vs_WT_DBSs_summits_bed[,3]-2000, end = Mu_vs_WT_DBSs_summits_bed[,3]+2000), strand = "*")
+
+# load bigwig 
+WT_bigwig <- rtracklayer::import("~/ChinmoST/output/chinmo_cut_tag/bigwig/merged_WT_D57_D911_RPKM_normalized.bw",format = "BigWig",selection = BigWigSelection(Mu_vs_WT_DBSs_summits_extended.gr))
+Mu_bigwig <- rtracklayer::import("~/ChinmoST/output/chinmo_cut_tag/bigwig/merged_Mu_D57_D911_RPKM_normalized.bw",format = "BigWig",selection = BigWigSelection(Mu_vs_WT_DBSs_summits_extended.gr))
+
+# Create the normalizedMatrix that EnrichedHeatmap accepts as input.
+WT_normMatrix <- normalizeToMatrix(
+  signal=WT_bigwig,
+  target=Mu_vs_WT_DBSs_summits.gr,
+  extend=2000,
+  value_column = "score",
+  mean_mode = "w0"
+  )
+Mu_normMatrix <- normalizeToMatrix(
+  signal=Mu_bigwig,
+  target=Mu_vs_WT_DBSs_summits.gr,
+  extend=2000,
+  value_column = "score",
+  mean_mode = "w0"
+  )
+
+# Make a color gradient that covers the range of normMatrix from 0 to thecol_fun <- colorRamp2(c(0,1500), c("white", "red")) 99th percentile
+col_fun <- colorRamp2(c(0,1500), c("white", "red"))
+Mu_vs_WT_DBS_Fold_df <- rbind(Mu_up_DBSs_summits,Mu_down_DBSs_summits)
+
+Mu_vs_WT_DBS_Fold <- as.numeric(Mu_vs_WT_DBS_Fold_df$Fold)
+DBS.gr <- GRanges(
+  seqnames=Mu_vs_WT_DBS_Fold_df$seqnames, 
+  ranges=IRanges(Mu_vs_WT_DBS_Fold_df$start, Mu_vs_WT_DBS_Fold_df$end)
+  ) 
+anno <- annotatePeak(DBS.gr,tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Dm.eg.db")
+anno <- as.data.frame(anno@anno)
+flybase_id <- read.table("~/ChinmoST/input/FlyBase_IDs.txt",header=FALSE,stringsAsFactors=FALSE,sep="\t",quote="")
+flybase_id <- flybase_id[-which(duplicated(flybase_id$V1)),]
+anno <- merge(anno,flybase_id,by.x="geneId",by.y="V1",all.x=TRUE,sort=FALSE)
+anno$SYMBOL[which(is.na(anno$SYMBOL))] <- anno$V3[which(is.na(anno$SYMBOL))]
+Mu_vs_WT_DBS_Fold_df <- left_join(Mu_vs_WT_DBS_Fold_df,anno[,c(2:4,7,16)],by=c("seqnames","start","end"))
+Mu_vs_WT_DBS_Fold <- as.numeric(Mu_vs_WT_DBS_Fold_df$Fold)
+
+
+# expression fold change in CySCs and GSCs
+testis_scRNA.integrated <- readRDS("~/ChinmoST/output/scRNA/seurat/integrated_analysis/integrated_PC30_testis_scRNA.rds")
+DefaultAssay(testis_scRNA.integrated) <- "RNA"
+Idents(testis_scRNA.integrated) <- testis_scRNA.integrated$cell_type
+cell_types <- levels(Idents(testis_scRNA.integrated))
+Mutant_vs_WT_markers.ls <- lapply(1:length(cell_types),function(i){
+	df <- FindMarkers(testis_scRNA.integrated, ident.1 =cell_types[i],assay="RNA",logfc.threshold=-Inf,min.pct=-Inf)
+	df
+	})
+names(Mutant_vs_WT_markers.ls) <- cell_types
+saveRDS(Mutant_vs_WT_markers.ls,"~/ChinmoST/output/scRNA/seurat/integrated_analysis/each_cell_type_Mutant_vs_WT_markers_list.rds")
+CySCs_DEGs_FC_df <- Mutant_vs_WT_markers.ls[["CySCs"]] %>%
+  dplyr::select(avg_logFC) %>%
+  dplyr::mutate(log2_avg_FC=log2(exp(avg_logFC)))
+CySCs_DEGs_FC_df$SYMBOL <- rownames(CySCs_DEGs_FC_df)
+rownames(CySCs_DEGs_FC_df) <- NULL
+colnames(CySCs_DEGs_FC_df)[1:2] <- paste("CySCs",colnames(CySCs_DEGs_FC_df)[1:2],sep="_")
+Mu_vs_WT_DBS_Fold_df <- left_join(Mu_vs_WT_DBS_Fold_df,CySCs_DEGs_FC_df,by=c("SYMBOL"))
+CySCs_DEGs_FC <- Mu_vs_WT_DBS_Fold_df$CySCs_log2_avg_FC
+CySCs_DEGs_FC <- ifelse(CySCs_DEGs_FC>=1,1,CySCs_DEGs_FC)
+CySCs_DEGs_FC <- ifelse(CySCs_DEGs_FC<=(-1),-1,CySCs_DEGs_FC)
+
+GSCs_DEGs_FC_df <- new_each_cell_type_Mutant_vs_WT_markers.ls[["GSCs/spermatogonia"]] %>%
+  dplyr::select(avg_logFC) %>%
+  dplyr::mutate(log2_avg_FC=log2(exp(avg_logFC)))
+GSCs_DEGs_FC_df$SYMBOL <- rownames(GSCs_DEGs_FC_df)
+rownames(GSCs_DEGs_FC_df) <- NULL
+colnames(GSCs_DEGs_FC_df)[1:2] <- paste("GSCs",colnames(GSCs_DEGs_FC_df)[1:2],sep="_")
+Mu_vs_WT_DBS_Fold_df <- left_join(Mu_vs_WT_DBS_Fold_df,GSCs_DEGs_FC_df,by=c("SYMBOL"))
+GSCs_DEGs_FC <- Mu_vs_WT_DBS_Fold_df$GSCs_log2_avg_FC
+GSCs_DEGs_FC <- ifelse(GSCs_DEGs_FC>=1,1,GSCs_DEGs_FC)
+GSCs_DEGs_FC <- ifelse(GSCs_DEGs_FC<=(-1),-1,GSCs_DEGs_FC)
+
+
+interested_genes <- c("veil","ATPsynB","mamo","Timp","ImpL2","Ald1","fru","Tpi","Tet","Rac2")
+interested_genes_idx <- sapply(1:length(interested_genes),function(i) {
+  indice <- which(Mu_vs_Mu_DBS_Fold_df$SYMBOL == interested_genes[i] & Mu_vs_Mu_DBS_Fold_df$DBS_type=="Mu down DBS")
+  indice[1]
+  })
+pdf("~/ChinmoST/output/chinmo_cut_tag/diffbind/D57_D911_Mu_vs_WT_DBS_EnrichedHeatmap.pdf",height=8.5,width=6)
+newpalette <- brewer.pal(9,"Set1")[c(1,2)]
+col1 <- colorRamp2(c(-4, 0, 4),rev(brewer.pal(n=3,name="RdBu")))
+col2 <- colorRamp2(c(-1, 0, 1),c("#2488F0","white","#E22929"))
+ha <- rowAnnotation(foo = anno_mark(at = interested_genes_idx, labels = interested_genes,labels_gp=gpar(fontsize = 10)))
+partition <- factor(c(rep("Mutant up DBSs",nrow(Mu_up_DBSs_summits_bed)),rep("Mutant down DBSs",nrow(Mu_down_DBSs_summits_bed))),levels=c("Mutant up DBSs","Mutant down DBSs"))
+lgd <- Legend(at = c("Mutant up DBSs","Mutant down DBSs"), title = "DBS type", 
+   type = "lines", legend_gp = gpar(col = newpalette))
+h2 <- EnrichedHeatmap(WT_normMatrix, col = col_fun, name = "Chinmo binding",
+              top_annotation = HeatmapAnnotation(lines = anno_enriched(gp = gpar(col = newpalette),ylim=c(0,1000),axis_param=list(at=c(200,400,600,800,1000),side = "left"))), column_title = "WT",heatmap_legend_param = list(direction = "horizontal",legend_width = unit(3, "cm"), title_position = "topcenter",border ="black"))
+h3 <- EnrichedHeatmap(Mu_normMatrix, col = col_fun, name = "Chinmo binding2",
+              top_annotation = HeatmapAnnotation(lines = anno_enriched(gp = gpar(col = newpalette),ylim=c(0,1000),axis_param=list(at=c(200,400,600,800,1000)))), column_title = "Mutant",heatmap_legend_param = list(direction = "horizontal",legend_width = unit(3, "cm"), title_position = "topcenter"),show_heatmap_legend=FALSE) 
+h4 <- Heatmap(Mu_vs_Mu_DBS_Fold,name="Chinmo binding Log2(FC)",col=col1,width = unit(8, "mm"),heatmap_legend_param = list(direction = "horizontal",legend_width = unit(3, "cm"), title_position = "topcenter"),border=TRUE)
+h5 <- Heatmap(CySCs_DEGs_FC,name="CySCs gene expression Log2(FC)",col=col2,width = unit(8, "mm"),heatmap_legend_param = list(direction = "horizontal",legend_width = unit(3, "cm"), title_position = "topcenter"),border=TRUE)
+h6 <- Heatmap(GSCs_DEGs_FC,name="GSCs gene expression Log2(FC)",col=col2,width = unit(8, "mm"),right_annotation = ha,heatmap_legend_param = list(direction = "horizontal",legend_width = unit(3, "cm"), title_position = "topcenter"),border=TRUE)
+ht_list <- h2 + h3 + h4 + h5 + h6
+draw(ht_list, split = partition,annotation_legend_list = list(lgd),
+    ht_gap = unit(c(3,6,3,3), "mm"),heatmap_legend_side = "bottom",annotation_legend_side = "bottom",heatmap_column_title_gp=gpar(fontsize = 5),legend_border = "black")
+dev.off()
 ```
 
 
 ## Binding and Expression Target Analysis (BETA)
-- script : 
-```R
+```shell
+# activate conda python2.7 environment
+condaup
+conda activate python2.7
 
+## calculate every gene's regulatory potential score based on  Mutant down peaks (assumed Chinmo bound sites in CySCs )
+cd ~/ChinmoST/output/chinmo_cut_tag/BETA
+python ~/ChinmoST/bin/drosophila_BETA.py \
+-p ~/ChinmoST/output/chinmo_cut_tag/diffbind/D57_D911_Mu_down_DBSs.bed \
+-n D57_D911_Mu_down_DBSs \
+-d 1000 \
+-g ~/DB/dm6/annotation/BETA_input.txt
+
+
+## calculate every gene's regulatory potential score based on  Mutant up peaks (assumed Chinmo bound sites in GSCs )
+python ~/ChinmoST/bin/drosophila_BETA.py \
+-p ~/ChinmoST/output/chinmo_cut_tag/diffbind/D57_D911_Mu_up_DBSs.bed \
+-n D57_D911_Mu_up_DBSs \
+-d 1000 \
+-g ~/DB/dm6/annotation/BETA_input.txt
+```
+```R
+## Load required packages
+library(ggplot2)
+library(dplyr)
+
+## Direct target prediction in CySCs
+binding_rank_df <- read.table("~/ChinmoST/output/chinmo_cut_tag/BETA/D57_D911_Mu_down_DBSs_1000bp_gene2score.txt",header=FALSE)
+binding_rank_df <- binding_rank_df %>% arrange(desc(V5))
+binding_rank_df <- binding_rank_df[-which(duplicated(binding_rank_df$V7)),]
+binding_rank_df <- data.frame(binding_rank=1:nrow(binding_rank_df),binding_score=binding_rank_df$V5,row.names=binding_rank_df$V7)
+binding_rank_df$binding_rank[which(binding_rank_df$binding_score==0)] <- NA
+Mutant_vs_WT_markers.ls <- readRDS("~/ChinmoST/output/scRNA/seurat/integrated_analysis/each_cell_type_Mutant_vs_WT_markers_list.rds")
+cell_types <- names(Mutant_vs_WT_markers.ls)
+Mutant_up_rank.ls <- lapply(1:length(cell_types),function(i) {
+  df <- Mutant_vs_WT_markers.ls[[i]]
+  df <- df %>%
+    dplyr::filter(avg_logFC>0) %>%
+    dplyr::arrange(p_val,desc(avg_logFC))
+  df$DEGs_rank <- 1:nrow(df)
+  df
+  })
+Mutant_down_rank.ls <- lapply(1:length(cell_types),function(i) {
+  df <- Mutant_vs_WT_markers.ls[[i]]
+  df <- df %>%
+    dplyr::filter(avg_logFC<0) %>%
+    dplyr::arrange(p_val,avg_logFC)
+  df$DEGs_rank <- -(1:nrow(df))
+  df
+  })
+DEGs_rank_df.ls <- lapply(1:length(cell_types),function(i){
+  df <- rbind(Mutant_up_rank.ls[[i]],Mutant_down_rank.ls[[i]])
+  df$DEGs_type <- ""
+  df$DEGs_type[which(df$p_val<0.05& df$avg_logFC>=log(1.5))] <- "up DEGs"
+  df$DEGs_type[which(df$p_val<0.05& df$avg_logFC<=-log(1.5))] <- "down DEGs"
+  df$DEGs_type[which(df$DEGs_type=="")] <- "Nonsignificant"
+  merged_df <- merge(df,binding_rank_df,by="row.names")
+  merged_df$rank_product <- merged_df$DEGs_rank*merged_df$binding_rank/nrow(merged_df)/nrow(merged_df)
+  merged_df <- merged_df %>%
+    arrange(abs(rank_product))
+  merged_df
+  })
+names(DEGs_rank_df.ls) <- cell_types
+write.table(DEGs_rank_df.ls[["CySCs"]],"~/ChinmoST/output/chinmo_cut_tag/BETA/CySCs_all_genes_1000bp_Mu_down_peaks_binding_and_expression_rank.txt",row.names=FALSE,col.names=TRUE,sep="\t",quote=FALSE)
+
+
+## Direct target prediction in GSCs/spermatogonia
+germline_binding_rank_df <- read.table("~/ChinmoST/output/chinmo_cut_tag/BETA/D57_D911_Mu_up_DBSs_1000bp_gene2score.txt",header=FALSE)
+germline_binding_rank_df <- germline_binding_rank_df %>% arrange(desc(V5))
+germline_binding_rank_df <- germline_binding_rank_df[-which(duplicated(germline_binding_rank_df$V7)),]
+germline_binding_rank_df <- data.frame(binding_rank=1:nrow(germline_binding_rank_df),binding_score=germline_binding_rank_df$V5,row.names=germline_binding_rank_df$V7)
+germline_binding_rank_df$binding_rank[which(germline_binding_rank_df$binding_score==0)] <- NA
+DEGs_germline_based_rank_df.ls <- lapply(1:length(cell_types),function(i){
+  df <- rbind(Mutant_up_rank.ls[[i]],Mutant_down_rank.ls[[i]])
+  df$DEGs_type <- ""
+  df$DEGs_type[which(df$p_val<0.05& df$avg_logFC>=log(1.5))] <- "up DEGs"
+  df$DEGs_type[which(df$p_val<0.05& df$avg_logFC<=-log(1.5))] <- "down DEGs"
+  df$DEGs_type[which(df$DEGs_type=="")] <- "Nonsignificant"
+  merged_df <- merge(df,germline_binding_rank_df,by="row.names")
+  merged_df$rank_product <- merged_df$DEGs_rank*merged_df$binding_rank/nrow(merged_df)/nrow(merged_df)
+  merged_df <- merged_df %>%
+    arrange(abs(rank_product))
+  merged_df
+  })
+names(DEGs_germline_based_rank_df.ls) <- cell_types
+write.table(DEGs_germline_based_rank_df.ls[["GSCs/spermatogonia"]],"~/ChinmoST/output/chinmo_cut_tag/BETA/GSCs_all_genes_1000bp_Mu_down_peaks_binding_and_expression_rank.txt",row.names=FALSE,col.names=TRUE,sep="\t",quote=FALSE)
+
+
+## regulatory function of chinmo in CySCs
+up_DEGs_df.ls <- lapply(1:length(cell_types),function(i) {
+  df <- DEGs_rank_df.ls[[i]]
+  df <- df %>%
+    dplyr::filter(DEGs_type=="up DEGs") %>%
+    dplyr::arrange(binding_rank) 
+  df <- df %>% 
+    dplyr::mutate(cumulative_fraction=1:nrow(df)/nrow(df)*100)
+  df
+  })
+down_DEGs_df.ls <- lapply(1:length(cell_types),function(i) {
+  df <- DEGs_rank_df.ls[[i]]
+  df <- df %>%
+    dplyr::filter(DEGs_type=="down DEGs") %>%
+    dplyr::arrange(binding_rank) 
+  df <- df %>% 
+    dplyr::mutate(cumulative_fraction=1:nrow(df)/nrow(df)*100)
+  df
+  })
+Nonsignificant_df.ls <- lapply(1:length(cell_types),function(i) {
+  df <- DEGs_rank_df.ls[[i]]
+  df <- df %>%
+    dplyr::filter(DEGs_type=="Nonsignificant") %>%
+    dplyr::arrange(binding_rank) 
+  df <- df %>% 
+    dplyr::mutate(cumulative_fraction=1:nrow(df)/nrow(df)*100)
+  df
+  })
+
+# uses a one-tailed Kolmogorov-Smirnov test to determine whether the UP and DOWN groups differ significantly from the NON group
+ks.test(up_DEGs_df.ls[[2]]$binding_rank,Nonsignificant_df.ls[[2]]$binding_rank,alternative="greater") # p-value = 0.9608
+ks.test(down_DEGs_df.ls[[2]]$binding_rank,Nonsignificant_df.ls[[2]]$binding_rank,alternative="greater") # p-value = 0.02568
+
+CySCs_df <- rbind(up_DEGs_df.ls[[2]],down_DEGs_df.ls[[2]],Nonsignificant_df.ls[[2]])
+CySCs_df$DEGs_type <- factor(CySCs_df$DEGs_type,levels=c("up DEGs","down DEGs","Nonsignificant"))
+pdf("~/ChinmoST/output/chinmo_cut_tag/BETA/CySCs_Mu_down_peaks_1000bp_DEGs_cumulative_distribution.pdf")
+ggplot(data=CySCs_df,aes(x=binding_rank,y=cumulative_fraction,color=DEGs_type))+
+  geom_line()+
+  scale_color_manual(values=c("red","blue","black"),labels=c("Up-regulated DEGs in mutant CySCs(Pval=0.961)","Down-regulated DEGs in mutant CySCs(Pval=0.026)","Nonsignificant genes in mutant CySCs"))+
+  labs(x="Rank of genes based on regulatory potential score",y="Cumulative fraction of genes (%)",title="Chinmo activating/repressive function prediction in CySCs",color="DEG types")+
+  ylim(0,25)+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background=element_rect(fill='transparent', color='black',linetype="solid"),plot.title = element_text(hjust = 0.5,size=16),axis.text = element_text(size=13),axis.title=element_text(size=14),legend.position =c(0.3,0.9),legend.background = element_rect(fill = "white", color = "black"))
+dev.off()
+
+
+## regulatory function of chinmo in GSCs
+up_DEGs_df.ls <- lapply(1:length(cell_types),function(i) {
+  df <- DEGs_germline_based_rank_df.ls[[i]]
+  df <- df %>%
+    dplyr::filter(DEGs_type=="up DEGs") %>%
+    dplyr::arrange(binding_rank) 
+  df <- df %>% 
+    dplyr::mutate(cumulative_fraction=1:nrow(df)/nrow(df)*100)
+  df
+  })
+down_DEGs_df.ls <- lapply(1:length(cell_types),function(i) {
+  df <- DEGs_germline_based_rank_df.ls[[i]]
+  df <- df %>%
+    dplyr::filter(DEGs_type=="down DEGs") %>%
+    dplyr::arrange(binding_rank) 
+  df <- df %>% 
+    dplyr::mutate(cumulative_fraction=1:nrow(df)/nrow(df)*100)
+  df
+  })
+Nonsignificant_df.ls <- lapply(1:length(cell_types),function(i) {
+  df <- DEGs_germline_based_rank_df.ls[[i]]
+  df <- df %>%
+    dplyr::filter(DEGs_type=="Nonsignificant") %>%
+    dplyr::arrange(binding_rank) 
+  df <- df %>% 
+    dplyr::mutate(cumulative_fraction=1:nrow(df)/nrow(df)*100)
+  df
+  })
+
+# uses a one-tailed Kolmogorov-Smirnov test to determine whether the UP and DOWN groups differ significantly from the NON group
+ks.test(up_DEGs_df.ls[[12]]$binding_rank,Nonsignificant_df.ls[[12]]$binding_rank,alternative="greater") # p-value = 0.1836
+ks.test(down_DEGs_df.ls[[12]]$binding_rank,Nonsignificant_df.ls[[12]]$binding_rank,alternative="greater") # p-value = 0.7901
+
+GSCs_df <- rbind(up_DEGs_df.ls[[12]],down_DEGs_df.ls[[12]],Nonsignificant_df.ls[[12]])
+GSCs_df$DEGs_type <- factor(GSCs_df$DEGs_type,levels=c("up DEGs","down DEGs","Nonsignificant"))
+
+pdf("~/ChinmoST/output/chinmo_cut_tag/BETA/GSCs_Mu_up_peaks_1000bp_DEGs_cumulative_distribution.pdf")
+ggplot(data=GSCs_df,aes(x=binding_rank,y=cumulative_fraction,color=DEGs_type))+
+  geom_line()+
+  scale_color_manual(values=c("red","blue","black"),labels=c("Up-regulated DEGs in mutant GSCs(Pval=0.1836)","Down-regulated DEGs in mutant GSCs(Pval=0.7901)","Nonsignificant genes in mutant GSCs"))+
+  labs(x="Rank of genes based on regulatory potential score",y="Cumulative fraction of genes (%)",title="Chinmo activating/repressive function prediction in GSCs",color="DEG types")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background=element_rect(fill='transparent', color='black',linetype="solid"),plot.title = element_text(hjust = 0.5,size=16),axis.text = element_text(size=13),axis.title=element_text(size=14),legend.position =c(0.3,0.9),legend.background = element_rect(fill = "white", color = "black"))
+dev.off()
 ```
